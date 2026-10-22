@@ -18,5 +18,3 @@ PARAMETER repeat_penalty 1.05
 #   On the 24B the expert-union problem is worse (64 experts vs 32).
 #   Use only for testing, with n-max=4. Do not enable for production.
 #   Per-request: options {"draft_num_predict": 4}
-EOF
-echo "created"; echo; echo "=== register it ==="; export OLLAMA_HOST=127.0.0.1:11435; ollama create lfm25-24b-dspark -f /home/parshu/Modelfile.lfm25-24b-dspark 2>&1 | tail -2
