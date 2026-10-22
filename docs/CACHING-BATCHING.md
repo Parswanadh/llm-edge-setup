@@ -65,3 +65,52 @@ Microsoft's coarse-to-fine compression: up to **20× compression with ~1.5-point
 | `--cache-reuse-hybrid` | New (PR #29918) | Potentially fixes LFM2 hybrid cache; test |
 
 **Bottom line:** The biggest, lowest-risk wins are (a) byte-stable prefixes + keeping the model loaded, (b) KV quantization + MoE expert offloading to fit in 8 GB, and (c) verifying whether LFM2.5's hybrid cache actually reuses (issue #16491 lineage). Everything else is speculative until measured on this hardware.
+
+---
+
+## 9. What's Actually Configured in the Service
+
+The direct llama-server service (`systemd/llfm25-24b.service`) currently runs with:
+
+```
+-c 131072 -fa on --jinja -t 8 -ctk ktq3 -ctv vtq3 --no-tq-deferred-k
+```
+
+**Not yet explicitly set (using defaults):**
+- `--cache-prompt` → default `on` (per-slot prompt cache, only unseen suffix re-evaluated)
+- `--cache-ram` → default `8192` MiB (host-RAM prompt cache for idle slots)
+- `--ctx-checkpoints` → default `32` (intermediate KV snapshots)
+- `--cache-reuse` → default `0` (disabled — min chunk size for prefix reuse via KV shifting)
+- `-b` / `-ub` → defaults `2048` / `512`
+- `--cache-idle-slots` → default `on` (publishes idle slots to RAM cache)
+
+**To enable prefix caching more aggressively, add to the service:**
+```
+--cache-ram 16384 --ctx-checkpoints 64 --cache-reuse 256
+```
+
+**To optimize batch throughput (MoE prefill), add:**
+```
+-b 4096 -ub 2048
+```
+
+**For the LFM2 hybrid cache issue (#16491), try:**
+```
+--cache-reuse-hybrid
+```
+This is new (PR #29918) and may fix the "forcing full prompt re-processing" problem for hybrid/recurrent models. **Untested on LFM2.5-24B.**
+
+## 10. Recommended Service Update
+
+```ini
+ExecStart=/home/parshu/.local/lib/llama-tq/merged/llama-server \
+  -m /home/parshu/.ollama/models/blobs/sha256-89617cc4d3a52e973ee8dea72c7df04285f582107385796ba903f81e540e4afa \
+  -ngl 99 --n-cpu-moe 24 -c 131072 -fa on --jinja -t 8 \
+  -ctk ktq3 -ctv vtq3 --no-tq-deferred-k \
+  --cache-prompt --cache-ram 16384 --ctx-checkpoints 64 --cache-reuse 256 \
+  -b 4096 -ub 2048 \
+  --host 127.0.0.1 --port 11436 --no-webui \
+  --api-key lfm25-secret --alias lfm25-24b
+```
+
+**Status:** Configured but not yet benchmarked. The `--cache-reuse` and `--cache-reuse-hybrid` flags are the most promising for coding agents (system prompt + tool schemas are identical every request). Must verify that LFM2.5's hybrid cache actually reuses (issue #16491 lineage) — if it doesn't, the workaround is seeding checkpoints via a pre-completion with `n_predict=1`.
