@@ -251,6 +251,43 @@ The observed `MemAvailable` on this box during other agents' benchmarks was
 huge pages, not even via khugepaged. The model's ~5 MiB random expert reads
 are 4 KiB-granular. This is a hardware/kernel constraint; no sysctl fixes it.
 
+### 2e. What the two paths actually cost (measured)
+
+Measured on the NVMe holding the model file, with `O_DIRECT` so the page cache
+is bypassed entirely (`scripts/`-style probe, 8B lfm2moe blob):
+
+```
+=== random 4 KiB O_DIRECT reads over a 1 GiB window ===
+  throughput   = 9565 IOPS
+  latency mean = 104.3 us
+  latency p50  = 105.2 us
+  latency p99  = 148.0 us
+
+=== sequential 1 MiB O_DIRECT reads (first 2 GiB) ===
+  throughput   = 1652 MB/s
+```
+
+RAM bandwidth on this box (single-thread `memcpy`, 512 MiB buffer):
+**16.8 GB/s** (aggregate is higher; llama.cpp's CPU MoE path is memory-bound
+and multi-threaded).
+
+Now the arithmetic for the 24B at `--n-cpu-moe 22` (≈ 405 MiB of CPU-resident
+expert bytes touched per token, 20 MoE layers × 4 experts × 5.06 MiB):
+
+| where the expert pages live | per-token cost | implied ceiling |
+|---|---|---|
+| page cache (RAM) | 405 MiB ÷ ~17–35 GB/s | **≈ 12–24 ms → 40–80 tok/s** |
+| re-read from NVMe | 405 MiB ÷ 1652 MB/s + 80 seeks × 104 µs | **≈ 253 ms → ~4 tok/s** |
+| re-read from zram (if it were swappable) | 405 MiB zstd decompress ≈ 405 MiB ÷ ~1 GB/s | **≈ 400 ms → ~2.5 tok/s** |
+
+**The page-cache-vs-NVMe gap is ~10x; the page-cache-vs-zram gap is another
+~2x.** Both are far larger than anything a sysctl can recover, and both are
+decided by *whether the model's pages are resident*, which is decided by free
+RAM — not by swap policy.
+
+This is also why "put the model in zram" cannot be the big win the brief
+anticipated: zram is the *slowest* of the three options for this workload.
+
 ---
 
 ## 3. Changes recommended
