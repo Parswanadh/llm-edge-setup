@@ -19,7 +19,16 @@ LS="$OLLAMA_HOME/llama-server.locked"
 M8=/home/parshu/.ollama/models/blobs/sha256-63c9be0cc3d5d7b0377161064a74c82b1a5a6ee9ba4a9a3cf034293d6dd09282
 OUT=/tmp/opencode/iso
 mkdir -p "$OUT"
-PORT="${PORT:-19957}"
+# Pick a free port in the sanctioned 19950-19959 range at run time; another
+# worker may be squatting on one.
+pick_port() {
+  local p
+  for p in $(seq 19950 19959); do
+    if ! ss -ltn 2>/dev/null | grep -q ":$p "; then echo "$p"; return 0; fi
+  done
+  echo "19950"
+}
+PORT="${PORT:-$(pick_port)}"
 RESULTS="${RESULTS:-$OUT/results.jsonl}"
 
 PROMPT="You are a helpful coding assistant. Analyze the following Python function and explain its time complexity, then suggest one optimization.
@@ -38,7 +47,25 @@ BASE=(-c 4096 -np 1 --no-jinja --chat-template chatml --load-mode none
       --cache-type-k q8_0 --cache-type-v q8_0 -fa on -b 1024 -ub 512
       -ngl 16 -t 8 --context-shift --keep 4)
 
-vmstat_get() { awk '/^pswpin /{print $2} /^pswpout /{print $3}' /proc/vmstat | tr '\n' ' '; }
+# pswpin and pswpout are 2-field counters (name + value). Emit "<in> <out>".
+vmstat_get() {
+  local i o
+  i=$(awk '/^pswpin /{print $2; exit}' /proc/vmstat)
+  o=$(awk '/^pswpout /{print $2; exit}' /proc/vmstat)
+  echo "${i:-0} ${o:-0}"
+}
+
+ARM_PID=""
+cleanup_arm() {
+  if [ -n "$ARM_PID" ]; then
+    kill -TERM "$ARM_PID" 2>/dev/null
+    for _ in $(seq 1 20); do kill -0 "$ARM_PID" 2>/dev/null || break; sleep 0.5; done
+    kill -9 "$ARM_PID" 2>/dev/null
+    wait "$ARM_PID" 2>/dev/null
+    ARM_PID=""
+  fi
+}
+trap cleanup_arm EXIT INT TERM
 
 arm() {  # $1=label $2=env string $3..=server args (FULL arg list)
   local label="$1"; shift
@@ -62,7 +89,8 @@ arm() {  # $1=label $2=env string $3..=server args (FULL arg list)
   # shellcheck disable=SC2086
   env $envs timeout 1800 "$LS" -m "$M8" --host 127.0.0.1 --port "$PORT" --no-webui --offline \
     --log-verbosity 4 --no-log-prefix --no-log-timestamps "$@" > "$logf" 2>&1 &
-  local pid=$!
+  ARM_PID=$!
+  local pid=$ARM_PID
   local ok=0
   for _ in $(seq 1 700); do
     curl -s --max-time 2 "http://127.0.0.1:$PORT/health" | grep -q '"status":"ok"' && { ok=1; break; }
@@ -134,7 +162,9 @@ except Exception as e:
   done
   kill -TERM $pid 2>/dev/null
   for _ in $(seq 1 20); do kill -0 $pid 2>/dev/null || break; sleep 0.5; done
-  kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null; sleep 3
+  kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
+  ARM_PID=""
+  sleep 3
 }
 
 case "${ARM:-all}" in

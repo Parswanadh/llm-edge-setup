@@ -91,7 +91,13 @@ EOF
 PROMPT_JSON=$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$PROMPT")
 
 # ---------- swap accounting --------------------------------------------------
-vmstat_get() { awk '/^pswpin /{print $2} /^pswpout /{print $3}' /proc/vmstat | tr '\n' ' '; }
+# pswpin and pswpout are 2-field counters (name + value). Emit "<in> <out>".
+vmstat_get() {
+  local i o
+  i=$(awk '/^pswpin /{print $2; exit}' /proc/vmstat)
+  o=$(awk '/^pswpout /{print $2; exit}' /proc/vmstat)
+  echo "${i:-0} ${o:-0}"
+}
 
 cleanup() {
   if [ -n "${SRV_PID:-}" ]; then
