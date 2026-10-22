@@ -1,0 +1,68 @@
+# =============================================================================
+# zram-memory-limit.service — bound zram's real-RAM usage
+# =============================================================================
+# WHY THIS IS THE ONE REAL FIX ON THIS BOX
+#
+#   /dev/zram0 is created by zram-generator with
+#       zram-size = max(8192, ram * 1.5)  ->  22.7 GiB  (1.5x the 15 GiB RAM)
+#   and has NO mem_limit (cat /sys/block/zram0/mem_limit -> 0).
+#
+#   mem_limit is documented by the kernel as "the maximum amount of memory
+#   ZRAM can use to store the compressed data".  With mem_limit = 0 (unset),
+#   zram may grow until its 22.7 GiB disksize is filled.  For INCOMPRESSIBLE
+#   data that is 22.7 GiB of REAL RAM on a box that only has 15 GiB.
+#
+#   The kernel documentation itself says: "There is little point creating a
+#   zram of greater than twice the size of memory since we expect a 2:1
+#   compression ratio."  1.5x is inside that guidance, but with no mem_limit
+#   the *worst case* is a 22.7 GiB zram on 15 GiB of RAM.
+#
+#   Combined with vm.swappiness = 180, the kernel is explicitly told to swap
+#   aggressively.  That is what we want for the model (so the page cache can
+#   keep the model), but it is also the mechanism that can consume all of RAM
+#   through zram if the swapped data does not compress.
+#
+#   This box has OOM-killed itself 31 times (projects/gpu/AGENTS.md).  This
+#   service is the cheapest way to make that impossible while keeping the
+#   current (good) aggressive-swappiness behaviour.
+#
+#   Measured current usage for reference:
+#     orig_data_size 5834031104  compr_data_size 1376179989  mem_used_total 1412014080
+#     i.e. 5.4 GiB of anonymous memory is currently held in 1.3 GiB of RAM.
+#   A 6 GiB cap leaves ~4.6x headroom over the observed working set.
+#
+# INSTALL
+#     sudo install -m 0644 systemd/zram-memory-limit.service /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now zram-memory-limit.service
+#
+# APPLY IMMEDIATELY (without installing the unit)
+#     sudo sh -c 'echo 6G > /sys/block/zram0/mem_limit'
+#
+# REVERT
+#     sudo sh -c 'echo 0 > /sys/block/zram0/mem_limit'      # 0 = unlimited
+#     sudo systemctl disable --now zram-memory-limit.service
+#     sudo rm -f /etc/systemd/system/zram-memory-limit.service
+#     sudo systemctl daemon-reload
+#
+# NOTE: /sys/block/zram0/mem_limit is mode 0400 root:root, so this CANNOT be
+# applied without root.  It is the only change in this whole report that
+# requires elevation.
+# =============================================================================
+
+[Unit]
+Description=Bound zram0's real-RAM usage so it can never OOM this 15 GiB box
+Documentation=https://www.kernel.org/doc/html/latest/admin-guide/blockdev/zram.html
+After=dev-zram0.swap systemd-zram-setup@zram0.service
+Requires=dev-zram0.swap
+BindsTo=dev-zram0.swap
+After=systemd-zram-setup@zram0.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'if [ -w /sys/block/zram0/mem_limit ]; then echo 6G > /sys/block/zram0/mem_limit; fi'
+ExecStop=/bin/sh -c 'if [ -w /sys/block/zram0/mem_limit ]; then echo 0 > /sys/block/zram0/mem_limit; fi'
+
+[Install]
+WantedBy=multi-user.target
