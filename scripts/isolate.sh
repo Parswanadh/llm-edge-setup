@@ -60,11 +60,11 @@ arm() {  # $1=label $2=env string $3..=server args (FULL arg list)
   fi
 
   # shellcheck disable=SC2086
-  env $envs timeout 420 "$LS" -m "$M8" --host 127.0.0.1 --port "$PORT" --no-webui --offline \
+  env $envs timeout 1800 "$LS" -m "$M8" --host 127.0.0.1 --port "$PORT" --no-webui --offline \
     --log-verbosity 4 --no-log-prefix --no-log-timestamps "$@" > "$logf" 2>&1 &
   local pid=$!
   local ok=0
-  for _ in $(seq 1 150); do
+  for _ in $(seq 1 700); do
     curl -s --max-time 2 "http://127.0.0.1:$PORT/health" | grep -q '"status":"ok"' && { ok=1; break; }
     kill -0 $pid 2>/dev/null || break
     sleep 2

@@ -238,6 +238,8 @@ process usually pays instead of the thing that caused the problem.
 
 ---
 
+## 2. What is actually true about where the model lives
+
 ### 2a. Clean file pages are never swapped
 
 With `--n-cpu-moe N`, the CPU-resident expert tensors are read directly out of
@@ -440,3 +442,146 @@ sudo rm -f /etc/sysctl.d/99-llm-edge-memory.conf && sudo sysctl --system
 | `systemd/zram-memory-limit.service` | systemd oneshot that sets `/sys/block/zram0/mem_limit = 6G` |
 | `scripts/prefault-model.sh` | pre-faults a GGUF into the page cache, reports residency |
 | `scripts/mmap_resident.py` | `mincore(2)`-based page-cache residency probe (no root needed) |
+
+---
+
+## 5. Measurements
+
+### 5a. What was actually measured
+
+**The 24 B model never arrived.** At the start of this session the blob
+`sha256-89617cc4…` was being fetched by *three* competing downloaders
+(`/tmp/opencode/dl24`, `/tmp/opencode/dl24_sub`, `/tmp/opencode/dl24_mine`)
+plus an `ollama pull` on 11435, over a **WiFi** link (`wlp47s0f0`, 60 GB
+received so far). The `ollama pull` stalled at 3 203 485 672 / 13 578 190 880
+bytes and its `-partial` files were later removed; the chunked downloaders
+reached 10.2 GiB (`dl24`) and 3.3 GiB (`dl24_sub`) of 13.58 GiB. The blob
+never appeared at the expected path during this session.
+
+**All throughput numbers below are therefore for the 8 B model**
+(`sha256-63c9be0…`, `lfm2moe`, 4.79 GiB of tensors), as the brief allows.
+The 24 B is extrapolated from these and from the measured I/O characteristics.
+
+### 5b. 8 B model layout, parsed from the GGUF header
+
+`--n-cpu-moe 14`:
+
+```
+tensors              = 256
+total tensor bytes   = 4.794 GiB
+expert (routed FFN)  = 4.343 GiB  (90.59 %)
+non-expert           = 0.451 GiB
+
+--n-cpu-moe 14 split
+  CPU-resident expert = 2.328 GiB in 36 tensors, blocks 2..13
+  VRAM-resident expert= 2.015 GiB in 30 tensors, blocks 14..23
+```
+
+(Blocks 0–1 are the dense leading blocks, so `--n-cpu-moe 14` puts only
+**12** MoE layers' experts on the CPU.)
+
+### 5c. Throughput vs page-cache state
+
+`llama-server`, `--n-cpu-moe 14`, `-c 4096`, `--cache-type-k/v q8_0`,
+`-fa on`, `-t 8`, 61 prompt tokens, 128 generated tokens, seed 42,
+temperature 0. One server, four consecutive phases, `vmstat 1` alongside.
+
+**Run A — model page cache WARM before the server started**
+
+| phase | decode tok/s | prefill tok/s | `si` max (pg/s) | `so` max | `bi` max (kB/s) | free min | cache min |
+|---|---|---|---|---|---|---|---|
+| WARM (503, model still loading) | – | – | 1 616 | 8 | 1 524 488 | 4 241 MB | 4 756 MB |
+| EVICT | 63.09 | 93.90 | 5 524 | 0 | 61 988 | 3 129 MB | 7 096 MB |
+| RECOVER | 66.23 | 140.69 | 8 792 | 0 | 19 276 | 3 117 MB | 7 052 MB |
+| PRESSURE (+2.5 GB anon) | 66.55 | 135.14 | 4 020 | 0 | 39 864 | **731 MB** | 6 774 MB |
+
+Model load time (server internal, `load_model` → `model loaded`): **3.76 s**.
+
+**Run B — model page cache COLD (evicted) before the server started**
+
+| phase | decode tok/s | prefill tok/s | `si` max (pg/s) | `so` max | `bi` max (kB/s) | free min | cache min |
+|---|---|---|---|---|---|---|---|
+| DECODE1 (first decode after a cold load) | 65.17 | **61.58** | 166 432 | 400 | **1 132 912** | 4 213 MB | 5 449 MB |
+| DECODE2 | 68.87 | 154.21 | 16 908 | 960 | 57 456 | 4 246 MB | 6 516 MB |
+| DECODE3 | 66.77 | 166.21 | 41 960 | 184 | 54 740 | 4 282 MB | 6 379 MB |
+| PRESSURE (+2.0 GB anon) | 64.81 | 114.54 | **106 140** | 0 | 107 312 | **2 165 MB** | 6 349 MB |
+
+Model load time (server internal): **10.47 s** — **2.8x** the warm load.
+
+### 5d. What the numbers say
+
+1. **Model load is the clearest page-cache signal: 3.76 s warm vs 10.47 s cold
+   (2.8x).** 4.9 GiB at the measured 1652 MB/s sequential NVMe rate is ~3.0 s
+   of extra I/O, which matches the 6.7 s difference to within the GPU copy.
+2. **Prefill is highly sensitive: 61.6 tok/s cold vs 154–166 tok/s warm —
+   a 2.6–2.7x gap.** Prefill touches the whole model (it runs the expert
+   matmuls at batch size), so a cold model means a cold expert working set.
+   `bi` peaked at 1 132 912 kB/s (1.13 GB/s) during DECODE1 versus ~55 000 kB/s
+   once warm — the NVMe was saturated.
+3. **Decode is nearly insensitive** (65–69 tok/s in every phase, including
+   under 2–2.5 GB of anonymous pressure). By the time DECODE1 runs, the CPU
+   expert working set (2.33 GiB) has been re-faulted in, and the per-token
+   working set is small enough that the NVMe readahead hides the rest.
+4. **Under anonymous pressure the cost shows up in zram, not in the model.**
+   In the PRESSURE phase `si` peaked at **106 140 pages/s = 415 MB/s of zram
+   decompression**, while `free` fell to 2.1 GB and the model's page cache
+   stayed at 6.3 GB (`cache min` 6 349 MB). The kernel swapped the *anonymous*
+   pressure into zram and left the model's file pages alone. That is exactly
+   the behaviour `vm.swappiness=180` + `vm.vfs_cache_pressure=50` + zram is
+   supposed to produce, and it is why the current configuration is already
+   close to right.
+5. **The one thing that is clearly broken** is zram's unbounded RAM appetite
+   (§1b): at 12:19 today zram held **9.28 GiB of zsmalloc** while the box
+   OOM-killed itself.
+
+### 5e. Extrapolation to the 24 B (not measured — the blob never arrived)
+
+For LFM2.5-24B-A2B, 40 blocks / 38 MoE layers / 64 experts / top-4:
+
+| `--n-cpu-moe` | CPU-resident expert (page cache) | VRAM-resident expert + non-expert |
+|---|---|---|
+| 22 | ~6.5 GiB | ~5.8 + 0.34 = 6.1 GiB |
+| 24 | ~7.1 GiB | ~5.5 + 0.34 = 5.8 GiB |
+| 26 | ~7.7 GiB | ~5.1 + 0.34 = 5.5 GiB |
+| 30 | ~9.1 GiB | ~4.2 + 0.34 = 4.5 GiB |
+
+RAM budget at `--n-cpu-moe 22` on an otherwise-idle box:
+
+```
+  6.5 GiB  model expert pages (page cache)
++ 1.6 GiB  zram's compressed copy of cold anon (measured, zram_total)
++ ~2.5 GiB live anon (desktop + llama-server compute + KV cache)
++ ~1.0 GiB kernel / slab / buffers
+  ----------
+  ~11.6 GiB of 15.1 GiB     -> FITS
+```
+
+**So the 24 B does fit in RAM at `--n-cpu-moe 22`, but only with ~3.5 GiB of
+slack, and only if nothing else on the box holds memory.** During this
+session `MemAvailable` swung between **5.2 GiB and 9.9 GiB** while other
+agents ran servers, and the box OOM-killed itself at 12:19. At 6.5 GiB of
+model pages plus a 2–3 GiB desktop baseline, the 24 B is at the edge: the
+page cache will be reclaimed in whole chunks, and the measured NVMe
+characteristic (1.13 GB/s, 104 µs random) puts the cold-path ceiling at
+**~4 tok/s** versus **~40–80 tok/s** with the pages in RAM.
+
+**Practical conclusion: the 24 B is RAM-resident at `--n-cpu-moe 22` only on a
+quiet box, and it is a page-cache-resident model, never a zram/swap-resident
+one. If it ever has to live in zram it will be *slower* than living on the
+NVMe, because QAD-Q4_0 does not compress.**
+
+### 5f. Measurement caveats
+
+* All 8 B numbers were taken on a box shared with other agents (up to three
+  concurrent `llama-server` processes, plus three model downloads). A run
+  that overlapped another agent's server will be depressed; the two runs
+  reported here were taken under the shared `llama-queue.sh` flock.
+* `vmstat 1`'s first data row is the since-boot average; the tables above use
+  only the per-second rows.
+* The "EVICT" phase in Run A is a **null result** and is reported as such:
+  `posix_fadvise(POSIX_FADV_DONTNEED)` on the model file does **not** evict
+  the pages while a live `llama-server` holds a `MAP_PRIVATE` mapping of
+  them — `bi` stayed at ~20–60 MB/s and the decode did not slow down. The
+  only way to reproduce the cold path is to evict **before** the server
+  starts, which is what Run B does.
+
