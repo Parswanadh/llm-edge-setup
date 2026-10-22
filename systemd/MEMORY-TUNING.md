@@ -307,8 +307,29 @@ It is **not** written to swap.
 Consequence: swapping the model into zram is not something the kernel does, and
 forcing it would be actively harmful (see 2b).
 
-Verified with `/proc/<pid>/smaps` on a live `llama-server`: the model mapping
-reports large `File:` and `Swap: 0`.
+**Verified directly on a live `llama-server`** (`/proc/<pid>/smaps`, server
+running with `--n-cpu-moe 10`):
+
+```
+7a4b91255000-7a4c0a116000 r--s  Rss=1753212 kB  File=0  Swap=0  Anon=0  PCl=0  PDir=0
+    /home/parshu/.ollama/models/blobs/sha256-63c9be0cc3d5d7b0377161064a74c82b1a5a6ee9ba4a9a3cf034293d6dd09282
+```
+
+* `r--s` = **read-only, shared** file mapping — that is llama.cpp's
+  `llama_mmap` of the GGUF, exposed as the `CPU_Mapped` buffer type
+  (`ggml_backend_cpu_buffer_from_ptr_type_get_name()` returns `"CPU_Mapped"`;
+  the CPU backend advertises `caps.buffer_from_host_ptr = true`, and
+  `llama_model_base::load_tensors()` uses `ggml_backend_dev_buffer_from_host_ptr()`
+  on the mapped region when `ml.use_mmap` is set).
+* `Rss = 1 753 212 kB` → 1.67 GiB of the model **is resident in RAM**.
+* `Anonymous: 0` → it is **entirely file-backed**; none of it is anonymous
+  memory that could be swapped.
+* `Swap: 0` → **none of the model's pages are in swap.** Not in zram, not on
+  `/swap.img`.
+
+(The `File:` counter in `smaps` reads 0 for shared file mappings on this
+kernel — it is a per-mm counter artefact. `Rss` + `Anonymous: 0` + `Swap: 0`
+is the authoritative combination.)
 
 ### 2b. QAD-Q4_0 weights are incompressible — zram cannot help them
 
