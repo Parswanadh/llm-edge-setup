@@ -169,7 +169,74 @@ Not changed.
 
 ---
 
-## 2. What is actually true about where the model lives
+## 1b. The box has already OOM-killed itself today — here is the evidence
+
+`journalctl -k --since "24 hours ago"` contains exactly one global OOM kill
+today, and it is the smoking gun for the `mem_limit` recommendation:
+
+```
+Oct 22 12:19:25 kernel: irq/187-iwlwifi: page allocation failure: order:0, mode:0x820(GFP_ATOMIC)
+Oct 22 12:19:25 kernel: iwlwifi 0000:2f:00.0: Failed to alloc_pages
+Oct 22 12:19:25 kernel: workqueue: swap_reclaim_work hogged CPU for >10000us 19 times
+Oct 22 12:19:28 kernel: llama-server invoked oom-killer: gfp_mask=0x440dc0(GFP_KERNEL_ACCOUNT|__GFP_ZERO|__GFP_COMP), order=0
+Oct 22 12:19:28 kernel: oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=user.slice,mems_allowed=0,global_oom
+Oct 22 12:19:28 kernel: Out of memory: Killed process 524045 (python3) total-vm:25196832kB, anon-rss:145976kB, pgtables:40892kB
+```
+
+The memory state at the moment of the kill:
+
+```
+Node 0 Normal free:123548kB  min:61092kB  low:240364kB  high:419636kB
+   active_anon:1508096kB inactive_anon:1461764kB active_file:1224kB inactive_file:8268kB
+   shmem:3030948kB  pagetables:148184kB
+   zspages:9284412kB          <-- 9.28 GiB of zsmalloc pages
+Free swap  = 56kB
+Total swap = 27991544kB       <-- 26.7 GiB, i.e. EVERY swap byte was allocated
+4068532 pages RAM
+```
+
+Read that carefully:
+
+* **`zspages: 9284412kB` = 9.28 GiB of zsmalloc pages.** zsmalloc is zram's
+  backing allocator, so **zram was holding 9.28 GiB of this box's 15.1 GiB of
+  RAM** to store swapped-out pages at the moment the OOM killer fired.
+  (For comparison, right now `nr_zspages` is 410516 → 1.6 GiB.)
+* **`Free swap = 56kB` of `Total swap = 27991544kB`** — the kernel considered
+  *all* 26.7 GiB of swap (zram's 22.7 GiB + `/swap.img`'s 4 GiB) to be
+  allocated.
+* `active_file` + `inactive_file` was only **9.5 MiB**: the page cache had been
+  squeezed to nothing. The model's page cache could not have survived this.
+* The allocation that failed was `GFP_KERNEL_ACCOUNT | __GFP_ZERO | __GFP_COMP`
+  from `llama-server`, and `workqueue: swap_reclaim_work hogged CPU` — the
+  kernel was thrashing swap to find memory.
+
+**This is exactly the failure mode that `mem_limit` prevents.** zram's
+`disksize` is 22.7 GiB on a 15.1 GiB box and `mem_limit` is `0` (unlimited),
+so zram is allowed to grow until it consumes the machine. Capping it at 6 GiB
+would have left ~9 GiB of RAM for the page cache and the working set.
+
+Note the victim was a *python3* process with 145 MB of RSS and 40 MB of page
+tables — the OOM killer picks by `oom_score`, not by merit, so the model
+process usually pays instead of the thing that caused the problem.
+
+---
+
+## 1c. Other observations from the live system
+
+| item | value | note |
+|---|---|---|
+| `systemd-oomd` | **active**, `ManagedOOMMemoryPressure=auto` | it kills the largest cgroup under PSI pressure. A `llama-server` holding a 6.5 GiB page-cache working set is the biggest cgroup on the box and is therefore the first candidate. Consider `ManagedOOMMemoryPressure=no` on the serving unit. (Not applied: the brief says do not modify `ollama-rootless`.) |
+| PSI memory | `some avg60=1.61 avg300=1.79`, `full avg60=1.59` | the box is in **sustained memory pressure** right now, which is why the page cache keeps being reclaimed and why `si` is non-zero continuously. |
+| `vm.overcommit_memory` | 0 (heuristic), `overcommit_ratio` 50 | unchanged; a 25 GiB-VM python3 process was allowed. |
+| `vm.min_free_kbytes` | 67584 (66 MiB) | kernel default for this RAM size. |
+| `vm.compaction_proactiveness` | 20 | default. |
+| `RLIMIT_MEMLOCK` | 2030821376 B (1.89 GiB), hard limit | cannot be raised without root → `--mlock` is unusable for a 6.5 GiB CPU-resident expert set. |
+| `zram` `huge_pages_since` | 3908015 (14.9 GiB) | that much **incompressible** data has been handed to zram since boot; it is stored raw, 1:1, in RAM. |
+| `zram` `mem_used_max` | 4.91 GB | peak real-RAM use of zram this boot, before the OOM. |
+| `/swap.img` | was 0 B at 12:15, **278 MB used** at 12:52 | disk swap *is* being used now; it competes with model reads for NVMe bandwidth. |
+| `vm.read_ahead_kb` | **does not exist as a sysctl** | the real knob is `/sys/block/<dev>/queue/read_ahead_kb`; `nvme0n1` = **128** (default, correct). The upstream llama.cpp 17–35x read-ahead warning does not apply to this box. |
+
+---
 
 ### 2a. Clean file pages are never swapped
 

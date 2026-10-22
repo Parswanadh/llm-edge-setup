@@ -1,0 +1,86 @@
+[Unit]
+Description=LFM2.5-24B-A2B (QAD-Q4_0) — direct llama-server on 127.0.0.1:11436
+Documentation=file:///home/parshu/llm-edge-setup/docs/CLIENT-SETUP.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# --- binary + CUDA backend -------------------------------------------------
+# llama.cpp f174553e1 (bundled with Ollama 0.40.8). Same binary Ollama itself
+# spawns, so the OpenAI-compat surface, --jinja chat template and
+# --spec-type draft-dspark are all available.
+ExecStart=/home/parshu/.local/lib/ollama-new/llama-server \
+  -m /home/parshu/.ollama/models/blobs/sha256-89617cc4d3a52e973ee8dea72c7df04285f582107385796ba903f81e540e4afa \
+  --host 127.0.0.1 \
+  --port 11436 \
+  --no-webui \
+  --offline \
+  --jinja \
+  --api-key llfm25-24b-local \
+  -c 4096 \
+  -np 1 \
+  -t 8 \
+  -tb 8 \
+  --n-cpu-moe 26 \
+  -ngl 99 \
+  --cache-type-k q8_0 \
+  --cache-type-v q8_0 \
+  -fa on \
+  -b 1024 \
+  -ub 512 \
+  --context-shift \
+  --keep 4
+
+# --- environment -----------------------------------------------------------
+# CUDA silently falls back to CPU if these are wrong, so they are mandatory.
+Environment=LD_LIBRARY_PATH=/home/parshu/.local/lib/ollama-new:/home/parshu/.local/lib/ollama-new/cuda_v13
+Environment=GGML_BACKEND_PATH=/home/parshu/.local/lib/ollama-new/cuda_v13/libggml-cuda.so
+# Let CPU-resident expert matmuls run on the GPU during prefill (batch >= 1).
+Environment=GGML_OP_OFFLOAD_MIN_BATCH=1
+# Never reach for the network: the model is a local file and this service must
+# work with the cable unplugged.
+Environment=HF_HUB_OFFLINE=1
+Environment=OLLAMA_MODELS=/home/parshu/.ollama/models
+
+# --- resource limits -------------------------------------------------------
+# The 24B Q4_0 GGUF is 12.65 GiB but only ~7.2 GiB of VRAM exists, so the
+# expert weights are mmap'd from disk into the page cache and the GPU cache
+# (--n-cpu-moe) keeps the hot subset resident. Resident set therefore floats
+# with page-cache pressure.
+#
+# MemoryMax=13G is deliberate:
+#   * Total RAM is 15 GiB and the desktop baseline already uses ~10 GiB.
+#   * 13G leaves ~2 GiB of headroom for the desktop, the compositor, the agent
+#     harnesses and the 26 GiB of zram/swapfile backing.
+#   * It is BELOW the 15 GiB physical size, so if this service ever does try to
+#     fault the whole model into anonymous memory the kernel reclaims this
+#     cgroup first instead of picking a desktop process to kill.
+#   * This box has OOM-killed itself 31 times; the cap converts a
+#     whole-desktop OOM into a bounded, restartable failure of THIS service.
+# MemoryHigh=11G applies back-pressure (the kernel reclaims this cgroup's page
+# cache) before MemoryMax is hit, so we degrade throughput rather than die.
+MemoryMax=13G
+MemoryHigh=11G
+MemorySwapMax=8G
+
+# Keep the desktop responsive: the CPU-side expert matmuls are the hot path
+# and must not starve the compositor or the agent harness.
+Nice=5
+IOSchedulingClass=idle
+CPUWeight=50
+# Threads are pinned to the physical cores, leaving the SMT siblings free.
+CPUAffinity=0-15
+
+Restart=on-failure
+RestartSec=5
+# Bounded backoff: if the model file is missing or VRAM is full, do not spin.
+StartLimitBurst=3
+StartLimitIntervalSec=120
+
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=default.target

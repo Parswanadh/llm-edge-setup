@@ -71,7 +71,7 @@ if [[ -z "$PROMPT" ]]; then echo "error: no prompt given" >&2; usage; exit 2; fi
 
 # ---- build the request ----------------------------------------------------
 REQ="$(mktemp)"
-trap 'rm -f "$REQ"' EXIT
+trap 'rm -f "$REQ" "$REQ.resp"' EXIT
 
 python3 - "$REQ" "$MODEL" "$PROMPT" "$SYSTEM" "$THINK" "$TOOLS_FILE" <<'PY'
 import json, os, sys
@@ -102,9 +102,10 @@ RESP="$(curl -sf --max-time 900 -H 'Content-Type: application/json' \
         -d @"$REQ" "$HOST/api/chat")" || {
   echo "error: request to $HOST/api/chat failed" >&2; exit 1; }
 
-echo "$RESP" | python3 -c '
+echo "$RESP" > "$REQ.resp"
+python3 - "$MODEL" "$REQ.resp" <<'PY'
 import json, sys
-d = json.load(sys.stdin)
+d = json.load(open(sys.argv[2]))
 if "error" in d:
     print("ERROR:", d["error"]); sys.exit(1)
 m = d.get("message", {})
@@ -124,10 +125,14 @@ if tc:
     print("=== TOOL CALLS ===")
     for i, c in enumerate(tc):
         fn = c.get("function", {})
-        print(f"[{i}] {fn.get(\"name\")}({json.dumps(fn.get(\"arguments\", {}), ensure_ascii=False)})")
+        name = fn.get("name")
+        args = fn.get("arguments", {})
+        if isinstance(args, str):
+            args = json.loads(args)
+        print("[{}] {}({})".format(i, name, json.dumps(args, ensure_ascii=False)))
 if not th and not ct and not tc:
     print("(empty response)")
 print()
-print(f"--- done_reason={d.get(\"done_reason\")} eval_count={d.get(\"eval_count\")} "
-      f"prompt_tokens={d.get(\"prompt_eval_count\")} ---")
-'
+print("--- model={} done_reason={} eval_count={} prompt_tokens={} ---".format(
+    sys.argv[1], d.get("done_reason"), d.get("eval_count"), d.get("prompt_eval_count")))
+PY
