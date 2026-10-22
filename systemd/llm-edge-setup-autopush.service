@@ -1,0 +1,13 @@
+[Unit]
+Description=Auto-commit and push llm-edge-setup changes to GitHub
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=REPO_DIR=/home/parshu/llm-edge-setup
+Environment=BRANCH=main
+Environment=REMOTE=origin
+WorkingDirectory=/home/parshu/llm-edge-setup
+ExecStart=/home/parshu/llm-edge-setup/scripts/auto-push.sh
+# Keep the unit short-lived; the timer re-invokes it.
+TimeoutStartSec=120
