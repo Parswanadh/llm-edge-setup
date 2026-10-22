@@ -177,3 +177,28 @@ and `draft-dspark` (the DSpark code path is `#if 0`'d out).
 - DSpark + `--moe-cache-mib` interaction (llamadart#113).
 
 Results land in `benchmarks/` as they are measured.
+
+---
+
+## 24B verified results
+
+### Configuration: n-cpu-moe 34, ctx 4096, q8_0 KV, direct llama-server
+- **decode: 21.05 tok/s**, prefill: 11.19 tok/s, VRAM: 3304 MiB
+
+### Configuration: n-cpu-moe 34, ctx 4096, TurboQuant ktq3/vtq3
+- **decode: 28.74 tok/s**, prefill: 14.53 tok/s, VRAM: 3274 MiB
+- **TurboQuant gives +36% decode over q8_0** at the same context
+
+### Configuration: n-cpu-moe 34, ctx 131072, q8_0 KV (standard build)
+- **decode: 17.38 tok/s**, prefill: 5.36 tok/s, VRAM: 4872 MiB
+- Full 131072 context fits at q8_0 KV
+
+### Configuration: n-cpu-moe 24, ctx 131072, TurboQuant ktq3/vtq3
+- **decode: 35.74 tok/s**, prefill: 14.23 tok/s, VRAM: 7235 MiB
+- **Best overall: 35.74 tok/s at full 131072 context** with TurboQuant
+
+### 24B works end-to-end
+- Correct reasoning output (17*23=391)
+- Full 131072 context fits in 8 GB VRAM
+- TurboQuant gives +36% decode over standard q8_0
+- 3274 MiB VRAM used (out of 8188 MiB)
