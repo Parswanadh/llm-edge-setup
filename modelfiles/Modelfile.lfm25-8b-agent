@@ -1,0 +1,15 @@
+FROM lfm2.5:8b
+
+# Ollama's own LFM2.5 migration (compatmigrate/lfm25_thinking.go) produces
+# renderer=lfm2-thinking + parser=lfm2-thinking. The "thinking" renderer variant
+# sets IsThinking=true, which gives the model a thinking contract of
+# {values:[true], default:true} -> thinking is ON by default and named efforts
+# ("medium"/"high"/...) are accepted. The plain "lfm2" renderer yields
+# {values:[false], default:false} -> thinking is OFF unless the request passes
+# an explicit boolean think:true.
+RENDERER lfm2-thinking
+PARSER lfm2-thinking
+
+PARAMETER temperature 0.1
+PARAMETER top_k 50
+PARAMETER repeat_penalty 1.05

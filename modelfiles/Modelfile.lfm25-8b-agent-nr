@@ -1,0 +1,11 @@
+FROM lfm2.5:8b
+
+# Literal spec variant: non-thinking renderer + thinking parser.
+# Matches the upstream lfm2.5:8b registry tag exactly.
+# Requires an explicit boolean "think": true on every request.
+RENDERER lfm2
+PARSER lfm2-thinking
+
+PARAMETER temperature 0.1
+PARAMETER top_k 50
+PARAMETER repeat_penalty 1.05
