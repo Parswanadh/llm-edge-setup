@@ -3,6 +3,9 @@ Description=LFM2.5-24B-A2B (QAD-Q4_0) — direct llama-server on 127.0.0.1:11436
 Documentation=file:///home/parshu/llm-edge-setup/docs/CLIENT-SETUP.md
 After=network-online.target
 Wants=network-online.target
+# Bounded backoff: if the model file is missing or VRAM is full, do not spin.
+StartLimitBurst=3
+StartLimitIntervalSec=120
 
 [Service]
 Type=simple
@@ -75,9 +78,6 @@ CPUAffinity=0-15
 
 Restart=on-failure
 RestartSec=5
-# Bounded backoff: if the model file is missing or VRAM is full, do not spin.
-StartLimitBurst=3
-StartLimitIntervalSec=120
 
 TimeoutStopSec=30
 KillSignal=SIGTERM
