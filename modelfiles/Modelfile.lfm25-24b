@@ -1,0 +1,14 @@
+FROM lfm2.5:24b-a2b-q4_0
+
+# The lfm2.5:24b* registry tags ship with NO renderer/parser, so:
+#   - the model's <think>...</think> reasoning block is not split out of `content`
+#   - structured tool calls are not emitted as `tool_calls`
+# The 8b tag declares these; the 24b tags do not. Setting them explicitly
+# wires up Ollama's shipped LFM2Renderer / LFM2Parser.
+RENDERER lfm2
+PARSER lfm2-thinking
+
+# Liquid AI's recommended sampling for LFM2.5-24B-A2B (also baked into the GGUF):
+PARAMETER temperature 0.1
+PARAMETER top_k 50
+PARAMETER repeat_penalty 1.05

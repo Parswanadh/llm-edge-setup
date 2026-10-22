@@ -1,0 +1,38 @@
+# Never commit model weights, binaries, or caches.
+*.gguf
+*.safetensors
+*.bin
+*.zst
+*.tar.gz
+*.tgz
+
+# Large build outputs
+build/
+build2/
+*.so
+*.so.*
+llama-server
+llama-cli
+llama-bench
+llama-quantize
+llama-speculative
+llama-perplexity
+ollama
+ollama-linux-*
+llama-gguf*
+
+# Model stores
+models/
+blobs/
+manifests/
+.ollama/
+
+# Runtime state
+*.log
+*.out
+*.res*.json
+nohup.out
+
+# Editor / OS
+.DS_Store
+*.swp
