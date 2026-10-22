@@ -1,0 +1,22 @@
+FROM lfm2.5:24b-a2b-q4_0
+
+# Speculative decoding drafter (Liquid AI's DSpark, 328M params, 633 MiB F16).
+# Shares the target's embeddings + LM head at load time.
+DRAFT /home/parshu/.ollama/models/draft/LFM2.5-24B-A2B-DSpark-F16.gguf
+
+# Renderer/parser (the 24b tag ships with neither).
+RENDERER lfm2
+PARSER lfm2-thinking
+
+# Liquid's recommended sampling.
+PARAMETER temperature 0.1
+PARAMETER top_k 50
+PARAMETER repeat_penalty 1.05
+
+# ⚠️  MEASURED ON THIS HARDWARE: DSpark is a NET LOSS for LFM2.5 on this box.
+#   8B proxy: 71.5 tok/s baseline → 62.9 (−12%) at n-max 4, 36.4 (−49%) at n-max 9.
+#   On the 24B the expert-union problem is worse (64 experts vs 32).
+#   Use only for testing, with n-max=4. Do not enable for production.
+#   Per-request: options {"draft_num_predict": 4}
+EOF
+echo "created"; echo; echo "=== register it ==="; export OLLAMA_HOST=127.0.0.1:11435; ollama create lfm25-24b-dspark -f /home/parshu/Modelfile.lfm25-24b-dspark 2>&1 | tail -2

@@ -1,22 +1,6 @@
 FROM lfm2.5:24b-a2b-q4_0
-
-# The lfm2.5:24b* registry tags ship with NO renderer and NO parser.
-# Consequences without them:
-#   - the model's <think>...</think> reasoning block stays inside `content`
-#   - structured tool calls are never emitted as `tool_calls`
-# The lfm2.5:8b tag DOES declare these ({"renderer":"lfm2","parser":"lfm2-thinking"});
-# only the 24b tags are missing them. Setting them explicitly wires up Ollama's
-# shipped LFM2Renderer / LFM2Parser.
 RENDERER lfm2
 PARSER lfm2-thinking
-
-# Liquid AI's recommended sampling for LFM2.5-24B-A2B. These are also baked into
-# the GGUF metadata, but Ollama does not always inherit them from the GGUF, and
-# the reasoning model's output quality is sensitive to top_k.
 PARAMETER temperature 0.1
 PARAMETER top_k 50
 PARAMETER repeat_penalty 1.05
-
-# NOTE: the thinking block is only split into the `thinking` field when the
-# REQUEST sets "think": true (or OLLAMA_THINK=1 on the server). The
-# renderer/parser alone is NOT sufficient. Verified on the 8B.
