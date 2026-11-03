@@ -453,7 +453,55 @@ opencode run -m "lfm25-24b/sha256-89617cc4d3a52e973ee8dea72c7df04285f58210738579
 
 ---
 
-## 15. What Didn't Work (and why)
+## 15. Colab Deployment (Free Tier, Single Command)
+
+### Overview
+Deploy LFM2.5-24B-A2B on Google Colab (free tier, T4 GPU) with vLLM, continuous batching, and DSpark speculative decoding. Get an API key + base URL to connect to any harness.
+
+### Quick Start
+
+```bash
+# 1. Install colab CLI (one-time)
+uv tool install google-colab-cli --with "jupyter-kernel-client<1.0"
+
+# 2. Authenticate (one-time, opens browser)
+colab new --gpu T4
+
+# 3. Deploy (single command)
+bash ~/llm-edge-setup/colab-deploy/deploy-colab.sh --gpu T4
+```
+
+The script prints:
+```
+  Base URL:  https://abc123.trycloudflare.com/v1
+  API Key:   lfm25-xxxxxxxxxxxxxxxx
+```
+
+### Connect locally
+```bash
+bash ~/llm-edge-setup/colab-deploy/colab-connect.sh https://abc123.trycloudflare.com/v1 lfm25-xxxxxxxxxxxxxxxx
+```
+
+### Architecture
+- **vLLM server** with continuous batching (max 256 seqs, 8192 batched tokens)
+- **DSpark speculative decoding** (9 draft tokens per step)
+- **Prefix caching** for shared prefixes
+- **cloudflared tunnel** (free, no auth) for public access
+- **AWQ-INT4** on T4 (fits 24B in 15GB), **FP8** on A100/H100
+
+### Free Tier Constraints
+- T4 GPU: 15 GB VRAM → AWQ-INT4 model (~6-7 GB), 32K context
+- Session timeout: ~90 min idle, ~12h max
+- Tunnel URL changes each session
+- API key regenerated each session (or set via `API_KEY` env var)
+
+### Files
+- `colab-deploy/colab-deploy.sh` — Main deployment script (runs on Colab)
+- `colab-deploy/deploy-colab.sh` — Local wrapper (provisions + deploys)
+- `colab-deploy/colab-connect.sh` — Connect local OpenCode to Colab
+- `colab-deploy/README.md` — Full Colab deployment guide
+
+## 16. What Didn't Work (and why)
 
 | Approach | Why it failed | Evidence |
 |---|---|---|
