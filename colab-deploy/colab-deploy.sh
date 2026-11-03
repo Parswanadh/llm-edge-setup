@@ -47,7 +47,7 @@ echo "=== Max context: $MAX_CTX ==="
 echo "=== Expert layers on CPU: $N_CPU_MOE ==="
 
 # ── Install dependencies ───────────────────────────────────────────────────
-echo "=== Installing llama.cpp + cloudflared ==="
+echo "=== Installing llama.cpp (TurboQuant) + cloudflared ==="
 
 # Download prebuilt llama-tq (TurboQuant) CUDA build
 if [ ! -f /tmp/llama-tq/llama-v2026.10.19/llama-server ]; then
@@ -76,7 +76,6 @@ MODEL_PATH="/content/models/LFM2.5-24B-A2B-QAD-Q4_0.gguf"
 if [ ! -f "$MODEL_PATH" ]; then
     echo "=== Downloading model (13.58 GB) ==="
     mkdir -p /content/models
-    # Use huggingface-cli for reliable download
     pip install -q huggingface_hub 2>&1 | tail -1
     python3 -c "
 from huggingface_hub import hf_hub_download
@@ -98,7 +97,7 @@ print('Downloaded to:', path)
 " 2>&1 | tail -2
 fi
 
-# ── Build command ──────────────────────────────────────────────────────────
+# ── Build llama-server command ──────────────────────────────────────────────
 export LD_LIBRARY_PATH="$TQ:/usr/local/lib/ollama/cuda_v12"
 export GGML_BACKEND_PATH="$TQ/libggml-cuda.so"
 
@@ -180,7 +179,7 @@ echo ""
 echo "  OpenCode (local):"
 echo "  opencode run -m \"lfm25-colab/lfm25-24b\" \"your prompt\""
 echo ""
-echo "  vLLM PID: $SERVER_PID"
+echo "  Server PID: $SERVER_PID"
 echo "  Tunnel PID: $CF_PID"
 echo "=========================================="
 
