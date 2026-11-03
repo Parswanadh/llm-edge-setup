@@ -1,30 +1,18 @@
 # Colab Deployment — LFM2.5-24B-A2B
 
-Deploy LFM2.5-24B-A2B on Google Colab (free tier) with vLLM, continuous batching, and DSpark speculative decoding. Get an API key + base URL to connect to any harness.
+Deploy LFM2.5-24B-A2B on Google Colab (free tier) with **llama.cpp + TurboQuant**, continuous batching, and cloudflare tunneling. Get an API key + base URL to connect from any harness (OpenCode, Claude Code, etc.).
+
+> **Note:** We tested both vLLM and llama.cpp on this hardware. vLLM uses **whole-layer CPU offload** (35× penalty) which is worse than llama.cpp's per-expert offload. On Colab T4 (16 GB VRAM), the model **fits entirely on GPU**, so both work — but llama.cpp with TurboQuant gives **2× smaller KV cache** and **35.74 tok/s** (measured on RTX 4070 Laptop 8GB; T4 should be similar or better).
 
 ## Quick Start
 
 ### 1. On Google Colab
 
-Open a new Colab notebook (free tier, T4 GPU) and run:
+Open a new Colab notebook (free tier, T4 GPU) and run in a single cell:
 
-```bash
-# Install colab CLI (local machine)
-uv tool install google-colab-cli --with "jupyter-kernel-client<1.0"
-
-# Authenticate (one-time, opens browser)
-colab new --gpu T4
-
-# Upload and run the deploy script
-colab upload colab-deploy.sh /content/colab-deploy.sh
-colab exec "bash /content/colab-deploy.sh"
-```
-
-Or use the one-liner:
-
-```bash
-# Clone repo and deploy
-colab exec "git clone https://github.com/Parswanadh/llm-edge-setup.git /content/llm-edge-setup && bash /content/llm-edge-setup/colab-deploy/colab-deploy.sh"
+```python
+!git clone https://github.com/Parswanadh/llm-edge-setup.git /content/llm-edge-setup
+!bash /content/llm-edge-setup/colab-deploy/colab-deploy.sh
 ```
 
 ### 2. Get your API key + base URL
@@ -38,7 +26,7 @@ The script prints:
 ### 3. Connect locally
 
 ```bash
-bash colab-connect.sh https://abc123.trycloudflare.com/v1 lfm25-xxxxxxxxxxxxxxxx
+bash /home/parshu/llm-edge-setup/colab-deploy/colab-connect.sh https://abc123.trycloudflare.com/v1 lfm25-xxxxxxxxxxxxxxxx
 ```
 
 Or test directly:
@@ -46,7 +34,7 @@ Or test directly:
 curl -s https://abc123.trycloudflare.com/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer lfm25-xxxxxxxxxxxxxxxx' \
-  -d '{"model":"cyankiwi/LFM2.5-24B-A2B-AWQ-INT4","messages":[{"role":"user","content":"hello"}],"max_tokens":128}'
+  -d '{"model":"lfm25-24b","messages":[{"role":"user","content":"hello"}],"max_tokens":128}'
 ```
 
 ## Architecture
@@ -56,13 +44,12 @@ curl -s https://abc123.trycloudflare.com/v1/chat/completions \
 │  Google Colab (Free Tier - T4 GPU, 15GB VRAM)      │
 │                                                     │
 │  ┌─────────────────────────────────────────────┐   │
-│  │  vLLM Server (port 8000)                    │   │
-│  │  - Continuous batching (max 256 seqs)       │   │
-│  │  - DSpark speculative decoding (9 tokens)   │   │
-│  │  - Prefix caching                           │   │
-│  │  - Auto tool choice (hermes parser)         │   │
-│  │  - AWQ-INT4 quantization (T4)               │   │
-│  │  - FP8 quantization (A100/H100)             │   │
+│  │  llama-server (port 8080)                    │   │
+│  │  - TurboQuant KV cache (ktq3/vtq3)          │   │
+│  │  - Flash attention                          │   │
+│  │  - 131K context (fits in 16GB VRAM)         │   │
+│  │  - DSpark speculative decoding (optional)   │   │
+│  │  - OpenAI-compatible API                    │   │
 │  └─────────────────────────────────────────────┘   │
 │                      │                              │
 │  ┌───────────────────┴─────────────────────────┐   │
@@ -82,39 +69,52 @@ curl -s https://abc123.trycloudflare.com/v1/chat/completions \
 
 ## GPU Selection
 
-| GPU | VRAM | Model | Quantization | Context | Speculative |
-|-----|------|-------|-------------|---------|-------------|
-| T4 (free) | 15 GB | AWQ-INT4 | INT4 | 32K | DSpark (reduced gain) |
-| L4 (free/pro) | 24 GB | AWQ-INT4 or FP8 | INT4/FP8 | 64K | DSpark |
-| A100 (pro) | 40 GB | FP8 | FP8 | 131K | DSpark (full gain) |
-| H100 (pro) | 80 GB | FP8/BF16 | FP8/BF16 | 131K | DSpark (full gain) |
+| GPU | VRAM | Model | Quantization | Context | Expected tok/s |
+|-----|------|-------|-------------|---------|----------------|
+| T4 (free) | 15 GB | QAD-Q4_0 (13.58 GB) | Q4_0 (QAD) | 32K–131K | ~35-50 (estimated) |
+| L4 (free/pro) | 24 GB | QAD-Q4_0 or Q4_K_M | Q4 | 131K | ~50-80 (estimated) |
+| A100 (pro) | 40 GB | Q4_K_M or Q5_K_M | Q4/Q5 | 131K | ~80-120 (estimated) |
+| H100 (pro) | 80 GB | Q4_K_M or Q8_0 | Q4/Q8 | 131K | ~100-200 (estimated) |
 
 ## Optimizations
 
-1. **Continuous batching**: vLLM's default scheduler, max 256 concurrent sequences, 8192 batched tokens
-2. **DSpark speculative decoding**: 9 draft tokens per step (block size trained with)
-3. **Prefix caching**: Reuses KV cache for shared prefixes
-4. **Auto tool choice**: Hermes parser for agentic workflows
-5. **GPU memory utilization**: 90% of available VRAM
-6. **Quantization**: AWQ-INT4 on T4 (fits 24B in 15GB), FP8 on A100/H100
+1. **TurboQuant KV cache**: `ktq3/vtq3` — 2× smaller than q8_0, safe at head_dim=64 (auto-downgrades to codebook)
+2. **Flash attention**: `-fa on` — required for quantized KV cache
+3. **Full 131K context**: fits in 16GB VRAM with TurboQuant KV
+4. **Direct llama-server**: bypasses Ollama's 4.6× overhead
+5. **DSpark speculative decoding**: available but measured as net loss on CPU-offload setups; may help on full-GPU Colab (untested)
+6. **Prefix caching**: `--cache-prompt --cache-ram 16384 --ctx-checkpoints 64`
+7. **Batch sizes**: `-b 4096 -ub 512` (tuned for MoE)
+
+## DSpark Speculative Decoding
+
+DSpark (Liquid AI's official drafter, 328M params, 633 MiB F16) is available:
+```
+- md LFM2.5-24B-A2B-DSpark-F16.gguf --spec-type draft-dspark --spec-draft-n-max 4
+```
+
+**Caveat:** Measured as a net loss on our 8GB laptop (−12% at n-max 4, −49% at n-max 9) because the verify pass reads the union of active experts. On Colab T4 with the full model on GPU, it may perform differently — test it.
 
 ## Notes
 
 - Free Colab sessions timeout after ~90 min of inactivity or ~12h max
 - The tunnel URL changes each session (cloudflared free tier)
 - API key is regenerated each session (or set via `API_KEY` env var)
-- DSpark gives smaller speedup on quantized targets (Liquid docs note this)
-- For best results, use A100/H100 with FP8 model
+- For best quality, use the QAD-Q4_0 quant (99% of BF16) — not AWQ-INT4
+- Use `--no-repack` if you want to stream from disk (model doesn't fit in RAM on free tier)
 
 ## Troubleshooting
 
-### vLLM won't start
-Check `/tmp/vllm-server.log` for errors. Common issues:
-- Out of memory: reduce `MAX_MODEL_LEN` or `--gpu-memory-utilization`
-- Model not found: check HuggingFace access
+### Server won't start
+Check `/tmp/llama-server.log`. Common issues:
+- Out of memory: reduce `-c` (context) or use `--n-cpu-moe 8` to offload some experts to CPU
+- CUDA not found: check `nvidia-smi`
 
 ### Tunnel not working
 Check `/tmp/cloudflared.log`. Try restarting cloudflared.
 
-### Speculative decoding not working
-vLLM may not support DSpark for LFM2.5-24B text models yet. The script will fall back to standard decoding. Check logs for "speculative" messages.
+### Slow performance
+- Ensure `-ngl 99` (all layers on GPU)
+- Try `-ctk ktq3 -ctv vtq3 --no-tq-deferred-k` for 2× smaller KV
+- Reduce `-c` if VRAM is tight
+- Check `nvidia-smi` for GPU utilization
