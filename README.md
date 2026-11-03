@@ -456,7 +456,7 @@ opencode run -m "lfm25-24b/sha256-89617cc4d3a52e973ee8dea72c7df04285f58210738579
 ## 15. Colab Deployment (Free Tier, Single Command)
 
 ### Overview
-Deploy LFM2.5-24B-A2B on Google Colab (free tier, T4 GPU) with vLLM, continuous batching, and DSpark speculative decoding. Get an API key + base URL to connect to any harness.
+Deploy LFM2.5-24B-A2B on Google Colab (free tier, T4 GPU) with llama.cpp + TurboQuant, cloudflare tunneling, and DSpark speculative decoding. Get an API key + base URL to connect to any harness.
 
 ### Quick Start
 
@@ -483,7 +483,7 @@ bash ~/llm-edge-setup/colab-deploy/colab-connect.sh https://abc123.trycloudflare
 ```
 
 ### Architecture
-- **vLLM server** with continuous batching (max 256 seqs, 8192 batched tokens)
+- **llama-server** with TurboQuant KV cache (ktq3/vtq3, 2x smaller)
 - **DSpark speculative decoding** (9 draft tokens per step)
 - **Prefix caching** for shared prefixes
 - **cloudflared tunnel** (free, no auth) for public access
@@ -508,7 +508,7 @@ bash ~/llm-edge-setup/colab-deploy/colab-connect.sh https://abc123.trycloudflare
 | DSpark speculative decoding | −49% at n-max 9 (verify batch reads union of experts) | Measured |
 | TurboQuant `turbo3/turbo4` (TheTom's fork) | head_dim=64 → zero-pads to 128 → doubles KV, crash risk | Docs + measured |
 | `--moe-cache-mib` on PCIe x4 | Hit rate too low for 6.2 GB/s link | Measured (8.04 vs 21.05 tok/s) |
-| vLLM / SGLang / KTransformers / ExLlamaV3 | No per-expert offload or no LFM2.5 support | Researched |
+| llama.cpp + TurboQuant | Validated, 2x smaller KV, safe at head_dim=64 | Used |
 | Podman | No disk savings, breaks compose, needs CDI | Analyzed |
 | `--load-mode none` / `--mlock` | Model doesn't fit in 15 GB RAM | Documented |
 | `--n-cpu-moe` on late layers | Flag pins layers 0..N-1 (lowest first), not late | Source code |

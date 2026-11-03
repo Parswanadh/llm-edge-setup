@@ -21,7 +21,7 @@ set -euo pipefail
 
 PORT="${PORT:-8080}"
 API_KEY="${API_KEY:-lfm25-$(openssl rand -hex 16)}"
-export VLLM_API_KEY="$API_KEY"
+export API_KEY="$API_KEY"
 
 # Auto-detect GPU
 GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)

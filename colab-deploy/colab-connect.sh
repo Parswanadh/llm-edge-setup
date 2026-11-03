@@ -32,7 +32,7 @@ with open(path) as f:
 cfg.setdefault("provider", {})
 cfg["provider"]["lfm25-colab"] = {
     "npm": "@ai-sdk/openai-compatible",
-    "name": "LFM2.5-24B (Colab vLLM)",
+    "name": "LFM2.5-24B (Colab llama.cpp)",
     "options": {
         "baseURL": "$BASE_URL",
         "apiKey": "$API_KEY"

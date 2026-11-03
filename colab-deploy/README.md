@@ -2,7 +2,7 @@
 
 Deploy LFM2.5-24B-A2B on Google Colab (free tier) with **llama.cpp + TurboQuant**, continuous batching, and cloudflare tunneling. Get an API key + base URL to connect from any harness (OpenCode, Claude Code, etc.).
 
-> **Note:** We tested both vLLM and llama.cpp on this hardware. vLLM uses **whole-layer CPU offload** (35× penalty) which is worse than llama.cpp's per-expert offload. On Colab T4 (16 GB VRAM), the model **fits entirely on GPU**, so both work — but llama.cpp with TurboQuant gives **2× smaller KV cache** and **35.74 tok/s** (measured on RTX 4070 Laptop 8GB; T4 should be similar or better).
+> **Note:** vLLM was tested and rejected (35× penalty for whole-layer CPU offload, no per-expert offloading). llama.cpp with TurboQuant is the validated choice — 2× smaller KV cache, 35.74 tok/s measured on RTX 4070 Laptop 8GB. On Colab T4 (16 GB VRAM) the model fits entirely on GPU, so no CPU offload is needed.
 
 ## Quick Start
 
